@@ -1,7 +1,13 @@
+waymo-open-dataset-tf-2-11-0==1.6.1
 numpy
-torch>=1.1
-tensorboardX
+# torch>=1.1 
+# torch==2.3.1
+tensorboardX==2.6.0
+tensorflow
 easydict
 pyyaml
 scikit-image
 tqdm
+# tensorflow==2.11
+# typing_extensions==4.8.0 #4.12.2
+# protobuf===3.19.6

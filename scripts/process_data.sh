@@ -1,0 +1,1 @@
+python mtr/datasets/waymo/data_preprocess.py ./data/waymo/scenario/  ./data/waymo

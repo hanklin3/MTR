@@ -53,6 +53,8 @@ def decode_map_features_from_proto(map_features):
     }
     polylines = []
 
+    # print('map_features', map_features.lane)
+
     point_cnt = 0
     for cur_data in map_features:
         cur_info = {'id': cur_data.id}
@@ -129,10 +131,15 @@ def decode_map_features_from_proto(map_features):
             cur_polyline = np.concatenate((cur_polyline[:, 0:3], cur_polyline_dir, cur_polyline[:, 3:]), axis=-1)
 
             map_infos['speed_bump'].append(cur_info)
-
+            # print('speed_bump')
+        elif cur_data.driveway.ByteSize() > 0:
+            # print('driveway')
+            continue
         else:
-            print(cur_data)
+            print('cur_data', cur_data, cur_data.DESCRIPTOR)
+            assert False, dir(cur_data)
             raise ValueError
+            continue
 
         polylines.append(cur_polyline)
         cur_info['polyline_index'] = (point_cnt, point_cnt + len(cur_polyline))
@@ -168,6 +175,7 @@ def decode_dynamic_map_states_from_proto(dynamic_map_states):
 
 
 def process_waymo_data_with_scenario_proto(data_file, output_path=None):
+    print(f'Processing datafile {data_file}')
     dataset = tf.data.TFRecordDataset(data_file, compression_type='')
     ret_infos = []
     for cnt, data in enumerate(dataset):
@@ -219,6 +227,8 @@ def get_infos_from_protos(data_path, output_path=None, num_workers=8):
 
     src_files = glob.glob(os.path.join(data_path, '*.tfrecord*'))
     src_files.sort()
+    print(f'Files found: {len(src_files)} from {data_path}')
+    # func(src_files[0])
 
     # func(src_files[0])
     with multiprocessing.Pool(num_workers) as p:
