@@ -124,7 +124,7 @@ class MTRDecoder(nn.Module):
             for cur_type in self.object_type:
                 cur_intention_points = intention_points_dict[cur_type]
                 cur_intention_points = torch.from_numpy(cur_intention_points).float().view(-1, 2).cuda()
-                intention_points[cur_type] = cur_intention_points
+                intention_points[cur_type] = cur_intention_points # [64, 2]
 
             intention_query_mlps = common_layers.build_mlps(
                 c_in=d_model, mlp_channels=[d_model, d_model], ret_before_act=True
@@ -373,14 +373,22 @@ class MTRDecoder(nn.Module):
         assert center_gt_trajs.shape[-1] == 4
 
         pred_list = self.forward_ret_dict['pred_list']
-        intention_points = self.forward_ret_dict['intention_points']  # (num_center_objects, num_query, 2)
+        intention_points = self.forward_ret_dict['intention_points']  # (num_center_objects, num_query, 2), num_query=64
 
-        num_center_objects = center_gt_trajs.shape[0]
+        num_center_objects = center_gt_trajs.shape[0] # center_gt_trajs: [25, 80, 4]
+        # center_gt_final_valid_idx: [25], all 79
         center_gt_goals = center_gt_trajs[torch.arange(num_center_objects), center_gt_final_valid_idx, 0:2]  # (num_center_objects, 2)
+        max_valid_idx = torch.minimum(center_gt_final_valid_idx, torch.tensor(40, device=center_gt_final_valid_idx.device))
 
         if not self.use_place_holder:
+            # Final goal nearest query (timestamp 80)
             dist = (center_gt_goals[:, None, :] - intention_points).norm(dim=-1)  # (num_center_objects, num_query)
             center_gt_positive_idx = dist.argmin(dim=-1)  # (num_center_objects)
+
+            # # Intermediate goal nearest query (timestamp 40)
+            # center_gt_goals_40 = center_gt_trajs[torch.arange(num_center_objects), max_valid_idx, 0:2]
+            # dist_40 = (center_gt_goals_40[:, None, :] - intention_points).norm(dim=-1)
+            # center_gt_positive_idx_40 = dist_40.argmin(dim=-1)  # (num_center_objects)
         else:
             raise NotImplementedError
 
@@ -391,7 +399,7 @@ class MTRDecoder(nn.Module):
             if self.use_place_holder:
                 raise NotImplementedError
 
-            pred_scores, pred_trajs = pred_list[layer_idx]
+            pred_scores, pred_trajs = pred_list[layer_idx] # pred_scores [25, 64]
             assert pred_trajs.shape[-1] == 7
             pred_trajs_gmm, pred_vel = pred_trajs[:, :, :, 0:5], pred_trajs[:, :, :, 5:7]
 
@@ -401,12 +409,19 @@ class MTRDecoder(nn.Module):
                 pre_nearest_mode_idxs=center_gt_positive_idx,
                 timestamp_loss_weight=None, use_square_gmm=False,
             )
+            # max_timestamp = max_valid_idx.min()
+            # loss_reg_gmm_40, center_gt_positive_idx_40 = loss_utils.nll_loss_gmm_direct(
+            #     pred_scores=pred_scores, pred_trajs=pred_trajs_gmm[:, :, :max_timestamp, :],
+            #     gt_trajs=center_gt_trajs[:, :max_timestamp, 0:2], gt_valid_mask=center_gt_trajs_mask[:, :max_timestamp],
+            #     pre_nearest_mode_idxs=center_gt_positive_idx_40,
+            #     timestamp_loss_weight=None, use_square_gmm=False
+            # )
 
             pred_vel = pred_vel[torch.arange(num_center_objects), center_gt_positive_idx]
             loss_reg_vel = F.l1_loss(pred_vel, center_gt_trajs[:, :, 2:4], reduction='none')
             loss_reg_vel = (loss_reg_vel * center_gt_trajs_mask[:, :, None]).sum(dim=-1).sum(dim=-1)
 
-            loss_cls = F.cross_entropy(input=pred_scores, target=center_gt_positive_idx, reduction='none')
+            loss_cls = F.cross_entropy(input=pred_scores, target=center_gt_positive_idx, reduction='none') # shape (25)
 
             # total loss
             weight_cls = self.model_cfg.LOSS_WEIGHTS.get('cls', 1.0)
@@ -414,6 +429,7 @@ class MTRDecoder(nn.Module):
             weight_vel = self.model_cfg.LOSS_WEIGHTS.get('vel', 0.2)
 
             layer_loss = loss_reg_gmm * weight_reg + loss_reg_vel * weight_vel + loss_cls.sum(dim=-1) * weight_cls
+            # layer_loss += loss_reg_gmm_40 * weight_reg
             layer_loss = layer_loss.mean()
             total_loss += layer_loss
             tb_dict[f'{tb_pre_tag}loss_layer{layer_idx}'] = layer_loss.item()

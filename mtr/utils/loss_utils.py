@@ -19,6 +19,7 @@ def nll_loss_gmm_direct(pred_scores, pred_trajs, gt_trajs, gt_valid_mask, pre_ne
         gt_trajs (batch_size, num_timestamps, 2):
         gt_valid_mask (batch_size, num_timestamps):
         timestamp_loss_weight (num_timestamps):
+        pre_nearest_mode_idxs (num_modes): ?
     """
     if use_square_gmm:
         assert pred_trajs.shape[-1] == 3 
@@ -38,8 +39,8 @@ def nll_loss_gmm_direct(pred_scores, pred_trajs, gt_trajs, gt_valid_mask, pre_ne
 
     nearest_trajs = pred_trajs[nearest_mode_bs_idxs, nearest_mode_idxs]  # (batch_size, num_timestamps, 5)
     res_trajs = gt_trajs - nearest_trajs[:, :, 0:2]  # (batch_size, num_timestamps, 2)
-    dx = res_trajs[:, :, 0]
-    dy = res_trajs[:, :, 1]
+    dx = res_trajs[:, :, 0] # [25, 80]
+    dy = res_trajs[:, :, 1] # [25, 80]
 
     if use_square_gmm:
         log_std1 = log_std2 = torch.clip(nearest_trajs[:, :, 2], min=log_std_range[0], max=log_std_range[1])
@@ -61,5 +62,34 @@ def nll_loss_gmm_direct(pred_scores, pred_trajs, gt_trajs, gt_valid_mask, pre_ne
     reg_gmm_exp = (0.5 * 1 / (1 - rho**2)) * ((dx**2) / (std1**2) + (dy**2) / (std2**2) - 2 * rho * dx * dy / (std1 * std2))  # (batch_size, num_timestamps)
 
     reg_loss = ((reg_gmm_log_coefficient + reg_gmm_exp) * gt_valid_mask).sum(dim=-1)
+
+    # # upweight 40th
+    # upweight_time_index = 4 * 10
+    # upweight = 2.0
+    # # Initialize a zero tensor for upweight contributions
+    # reg_gmm_exp_upweight = torch.zeros_like(reg_gmm_exp)
+    # # Add upweight loss only at the specified timestep (upweight_time_index)
+    # reg_gmm_exp_upweight[:, upweight_time_index] = (0.5 * 1 / (1 - rho[:, upweight_time_index]**2)) * (
+    #     (dx[:, upweight_time_index]**2) / (std1[:, upweight_time_index]**2) +
+    #     (dy[:, upweight_time_index]**2) / (std2[:, upweight_time_index]**2) -
+    #     2 * rho[:, upweight_time_index] * dx[:, upweight_time_index] * dy[:, upweight_time_index] /
+    #     (std1[:, upweight_time_index] * std2[:, upweight_time_index])
+    # )
+
+    # # upweight 60th
+    # upweight_time_index = 6 * 10
+    # upweight = 2.0
+    # # Initialize a zero tensor for upweight contributions
+    # # reg_gmm_exp_upweight = torch.zeros_like(reg_gmm_exp)
+    # # Add upweight loss only at the specified timestep (upweight_time_index)
+    # reg_gmm_exp_upweight[:, upweight_time_index] = (0.5 * 1 / (1 - rho[:, upweight_time_index]**2)) * (
+    #     (dx[:, upweight_time_index]**2) / (std1[:, upweight_time_index]**2) +
+    #     (dy[:, upweight_time_index]**2) / (std2[:, upweight_time_index]**2) -
+    #     2 * rho[:, upweight_time_index] * dx[:, upweight_time_index] * dy[:, upweight_time_index] /
+    #     (std1[:, upweight_time_index] * std2[:, upweight_time_index])
+    # )
+
+    # reg_loss = ((reg_gmm_log_coefficient + reg_gmm_exp + upweight* reg_gmm_exp_upweight) * gt_valid_mask).sum(dim=-1)
+    
 
     return reg_loss, nearest_mode_idxs

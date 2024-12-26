@@ -124,14 +124,15 @@ def transform_preds_to_waymo_format(pred_dicts, top_k_for_eval=-1, eval_second=8
         num_frames_in_total = 91
         num_frame_to_eval = 16
 
+    np.object = object  
     batch_pred_trajs = np.zeros((num_scenario, num_max_objs_per_scene, topK, 1, num_frame_to_eval, 2))
     batch_pred_scores = np.zeros((num_scenario, num_max_objs_per_scene, topK))
     gt_trajs = np.zeros((num_scenario, num_max_objs_per_scene, num_frames_in_total, 7))
-    gt_is_valid = np.zeros((num_scenario, num_max_objs_per_scene, num_frames_in_total), dtype=np.int)
+    gt_is_valid = np.zeros((num_scenario, num_max_objs_per_scene, num_frames_in_total), dtype=np.int64)
     pred_gt_idxs = np.zeros((num_scenario, num_max_objs_per_scene, 1))
-    pred_gt_idx_valid_mask = np.zeros((num_scenario, num_max_objs_per_scene, 1), dtype=np.int)
+    pred_gt_idx_valid_mask = np.zeros((num_scenario, num_max_objs_per_scene, 1), dtype=np.int64)
     object_type = np.zeros((num_scenario, num_max_objs_per_scene), dtype=np.object)
-    object_id = np.zeros((num_scenario, num_max_objs_per_scene), dtype=np.int)
+    object_id = np.zeros((num_scenario, num_max_objs_per_scene), dtype=np.int64)
     scenario_id = np.zeros((num_scenario), dtype=np.object)
 
     object_type_cnt_dict = {}
@@ -179,6 +180,7 @@ def waymo_evaluation(pred_dicts, top_k=-1, eval_second=8, num_modes_for_eval=6):
     )
     eval_config = _default_metrics_config(eval_second=eval_second, num_modes_for_eval=num_modes_for_eval)
 
+    np.bool = bool 
     pred_score = tf.convert_to_tensor(pred_score, np.float32)
     pred_trajs = tf.convert_to_tensor(pred_trajectory, np.float32)
     gt_trajs = tf.convert_to_tensor(gt_infos['gt_trajectory'], np.float32)

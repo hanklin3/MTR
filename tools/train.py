@@ -125,7 +125,7 @@ def main():
     if args.batch_size is None:
         args.batch_size = cfg.OPTIMIZATION.BATCH_SIZE_PER_GPU
     else:
-        assert args.batch_size % total_gpus == 0, 'Batch size should match the number of gpus'
+        assert args.batch_size % total_gpus == 0, f'Batch size should match the number of gpus {args.batch_size}, {total_gpus}'
         args.batch_size = args.batch_size // total_gpus
 
     args.epochs = cfg.OPTIMIZATION.NUM_EPOCHS if args.epochs is None else args.epochs
