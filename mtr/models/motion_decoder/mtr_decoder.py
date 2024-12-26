@@ -73,7 +73,7 @@ class MTRDecoder(nn.Module):
         temp_layer = common_layers.build_mlps(c_in=self.d_model * 2 + map_d_model, mlp_channels=[self.d_model, self.d_model], ret_before_act=True)
         self.query_feature_fusion_layers = nn.ModuleList([copy.deepcopy(temp_layer) for _ in range(self.num_decoder_layers)])
 
-        self.motion_reg_heads, self.motion_cls_heads, self.motion_vel_heads = self.build_motion_head(
+        self.motion_reg_heads, self.motion_cls_heads, self.motion_vel_heads, self.motion_cls_heads_40 = self.build_motion_head(
             in_channels=self.d_model, hidden_size=self.d_model, num_decoder_layers=self.num_decoder_layers
         )
 
@@ -143,8 +143,9 @@ class MTRDecoder(nn.Module):
 
         motion_reg_heads = nn.ModuleList([copy.deepcopy(motion_reg_head) for _ in range(num_decoder_layers)])
         motion_cls_heads = nn.ModuleList([copy.deepcopy(motion_cls_head) for _ in range(num_decoder_layers)])
+        motion_cls_heads_40 = nn.ModuleList([copy.deepcopy(motion_cls_head) for _ in range(num_decoder_layers)])
         motion_vel_heads = None 
-        return motion_reg_heads, motion_cls_heads, motion_vel_heads
+        return motion_reg_heads, motion_cls_heads, motion_vel_heads, motion_cls_heads_40
 
     def apply_dense_future_prediction(self, obj_feature, obj_mask, obj_pos):
         num_center_objects, num_objects, _ = obj_feature.shape
@@ -347,6 +348,7 @@ class MTRDecoder(nn.Module):
             # motion prediction
             query_content_t = query_content.permute(1, 0, 2).contiguous().view(num_center_objects * num_query, -1)
             pred_scores = self.motion_cls_heads[layer_idx](query_content_t).view(num_center_objects, num_query)
+            pred_scores_40 = self.motion_cls_heads_40[layer_idx](query_content_t).view(num_center_objects, num_query)
             if self.motion_vel_heads is not None:
                 pred_trajs = self.motion_reg_heads[layer_idx](query_content_t).view(num_center_objects, num_query, self.num_future_frames, 5)
                 pred_vel = self.motion_vel_heads[layer_idx](query_content_t).view(num_center_objects, num_query, self.num_future_frames, 2)
@@ -354,7 +356,7 @@ class MTRDecoder(nn.Module):
             else:
                 pred_trajs = self.motion_reg_heads[layer_idx](query_content_t).view(num_center_objects, num_query, self.num_future_frames, 7)
 
-            pred_list.append([pred_scores, pred_trajs])
+            pred_list.append([pred_scores, pred_trajs, pred_scores_40])
 
             # update
             pred_waypoints = pred_trajs[:, :, :, 0:2]
@@ -385,10 +387,10 @@ class MTRDecoder(nn.Module):
             dist = (center_gt_goals[:, None, :] - intention_points).norm(dim=-1)  # (num_center_objects, num_query)
             center_gt_positive_idx = dist.argmin(dim=-1)  # (num_center_objects)
 
-            # # Intermediate goal nearest query (timestamp 40)
-            # center_gt_goals_40 = center_gt_trajs[torch.arange(num_center_objects), max_valid_idx, 0:2]
-            # dist_40 = (center_gt_goals_40[:, None, :] - intention_points).norm(dim=-1)
-            # center_gt_positive_idx_40 = dist_40.argmin(dim=-1)  # (num_center_objects)
+            # Intermediate goal nearest query (timestamp 40)
+            center_gt_goals_40 = center_gt_trajs[torch.arange(num_center_objects), max_valid_idx, 0:2]
+            dist_40 = (center_gt_goals_40[:, None, :] - intention_points).norm(dim=-1)
+            center_gt_positive_idx_40 = dist_40.argmin(dim=-1)  # (num_center_objects)
         else:
             raise NotImplementedError
 
@@ -399,7 +401,7 @@ class MTRDecoder(nn.Module):
             if self.use_place_holder:
                 raise NotImplementedError
 
-            pred_scores, pred_trajs = pred_list[layer_idx] # pred_scores [25, 64]
+            pred_scores, pred_trajs, pred_scores_40 = pred_list[layer_idx] # pred_scores [25, 64]
             assert pred_trajs.shape[-1] == 7
             pred_trajs_gmm, pred_vel = pred_trajs[:, :, :, 0:5], pred_trajs[:, :, :, 5:7]
 
@@ -409,19 +411,22 @@ class MTRDecoder(nn.Module):
                 pre_nearest_mode_idxs=center_gt_positive_idx,
                 timestamp_loss_weight=None, use_square_gmm=False,
             )
-            # max_timestamp = max_valid_idx.min()
-            # loss_reg_gmm_40, center_gt_positive_idx_40 = loss_utils.nll_loss_gmm_direct(
-            #     pred_scores=pred_scores, pred_trajs=pred_trajs_gmm[:, :, :max_timestamp, :],
-            #     gt_trajs=center_gt_trajs[:, :max_timestamp, 0:2], gt_valid_mask=center_gt_trajs_mask[:, :max_timestamp],
-            #     pre_nearest_mode_idxs=center_gt_positive_idx_40,
-            #     timestamp_loss_weight=None, use_square_gmm=False
-            # )
+
+            # GMM loss up to 40
+            max_timestamp = max_valid_idx.min()
+            loss_reg_gmm_40, center_gt_positive_idx_40 = loss_utils.nll_loss_gmm_direct(
+                pred_scores=pred_scores, pred_trajs=pred_trajs_gmm[:, :, :max_timestamp, :],
+                gt_trajs=center_gt_trajs[:, :max_timestamp, 0:2], gt_valid_mask=center_gt_trajs_mask[:, :max_timestamp],
+                pre_nearest_mode_idxs=center_gt_positive_idx_40,
+                timestamp_loss_weight=None, use_square_gmm=False
+            )
 
             pred_vel = pred_vel[torch.arange(num_center_objects), center_gt_positive_idx]
             loss_reg_vel = F.l1_loss(pred_vel, center_gt_trajs[:, :, 2:4], reduction='none')
             loss_reg_vel = (loss_reg_vel * center_gt_trajs_mask[:, :, None]).sum(dim=-1).sum(dim=-1)
 
             loss_cls = F.cross_entropy(input=pred_scores, target=center_gt_positive_idx, reduction='none') # shape (25)
+            loss_cls_40 = F.cross_entropy(input=pred_scores_40, target=center_gt_positive_idx_40, reduction='none') # shape (25)
 
             # total loss
             weight_cls = self.model_cfg.LOSS_WEIGHTS.get('cls', 1.0)
@@ -429,13 +434,14 @@ class MTRDecoder(nn.Module):
             weight_vel = self.model_cfg.LOSS_WEIGHTS.get('vel', 0.2)
 
             layer_loss = loss_reg_gmm * weight_reg + loss_reg_vel * weight_vel + loss_cls.sum(dim=-1) * weight_cls
-            # layer_loss += loss_reg_gmm_40 * weight_reg
+            layer_loss += loss_reg_gmm_40 * weight_reg + loss_cls_40.sum(dim=-1) * weight_cls 
             layer_loss = layer_loss.mean()
             total_loss += layer_loss
             tb_dict[f'{tb_pre_tag}loss_layer{layer_idx}'] = layer_loss.item()
             tb_dict[f'{tb_pre_tag}loss_layer{layer_idx}_reg_gmm'] = loss_reg_gmm.mean().item() * weight_reg
             tb_dict[f'{tb_pre_tag}loss_layer{layer_idx}_reg_vel'] = loss_reg_vel.mean().item() * weight_vel
             tb_dict[f'{tb_pre_tag}loss_layer{layer_idx}_cls'] = loss_cls.mean().item() * weight_cls
+            tb_dict[f'{tb_pre_tag}loss_layer{layer_idx}_cls_40'] = loss_cls_40.mean().item() * weight_cls
 
             if layer_idx + 1 == self.num_decoder_layers:
                 layer_tb_dict_ade = motion_utils.get_ade_of_each_category(
@@ -504,7 +510,7 @@ class MTRDecoder(nn.Module):
         return total_loss, tb_dict, disp_dict
 
     def generate_final_prediction(self, pred_list, batch_dict):
-        pred_scores, pred_trajs = pred_list[-1]
+        pred_scores, pred_trajs, pred_scores_40 = pred_list[-1]
         pred_scores = torch.softmax(pred_scores, dim=-1)  # (num_center_objects, num_query)
 
         num_center_objects, num_query, num_future_timestamps, num_feat = pred_trajs.shape
