@@ -409,6 +409,7 @@ class MTRDecoder(nn.Module):
                 pre_nearest_mode_idxs=center_gt_positive_idx,
                 timestamp_loss_weight=None, use_square_gmm=False,
             )
+            # 0003_time0-40
             # max_timestamp = max_valid_idx.min()
             # loss_reg_gmm_40, center_gt_positive_idx_40 = loss_utils.nll_loss_gmm_direct(
             #     pred_scores=pred_scores, pred_trajs=pred_trajs_gmm[:, :, :max_timestamp, :],
@@ -421,7 +422,15 @@ class MTRDecoder(nn.Module):
             loss_reg_vel = F.l1_loss(pred_vel, center_gt_trajs[:, :, 2:4], reduction='none')
             loss_reg_vel = (loss_reg_vel * center_gt_trajs_mask[:, :, None]).sum(dim=-1).sum(dim=-1)
 
-            loss_cls = F.cross_entropy(input=pred_scores, target=center_gt_positive_idx, reduction='none') # shape (25)
+            # convert center_gt_positive_idx from indices to one-hot. 
+            # change num_center_objects_to_zero_indices to uniform distribution, highest entropy loss
+            num_center_objects_to_zero_indices = self.forward_ret_dict['num_center_objects_to_zero_indices']
+            NUM_QUERY = 64
+            center_gt_positive_idx_prob = F.one_hot(center_gt_positive_idx, num_classes=NUM_QUERY).float() # (num_center_objects, num_query) (25, 64)
+            center_gt_positive_idx_prob[num_center_objects_to_zero_indices, :] = 1./NUM_QUERY
+            loss_cls = F.cross_entropy(input=pred_scores, target=center_gt_positive_idx_prob, reduction='none') # shape (25)
+
+            # loss_cls = F.cross_entropy(input=pred_scores, target=center_gt_positive_idx, reduction='none') # shape (25)
 
             # total loss
             weight_cls = self.model_cfg.LOSS_WEIGHTS.get('cls', 1.0)
@@ -528,6 +537,8 @@ class MTRDecoder(nn.Module):
         center_objects_feature = batch_dict['center_objects_feature']
         num_center_objects, num_objects, _ = obj_feature.shape
         num_polylines = map_feature.shape[1]
+        num_center_objects_to_zero_indices = batch_dict['input_dict']['num_center_objects_to_zero_indices']
+        self.forward_ret_dict['num_center_objects_to_zero_indices'] = num_center_objects_to_zero_indices
 
         # input projection
         center_objects_feature = self.in_proj_center_obj(center_objects_feature)
