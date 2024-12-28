@@ -385,10 +385,10 @@ class MTRDecoder(nn.Module):
             dist = (center_gt_goals[:, None, :] - intention_points).norm(dim=-1)  # (num_center_objects, num_query)
             center_gt_positive_idx = dist.argmin(dim=-1)  # (num_center_objects)
 
-            # # Intermediate goal nearest query (timestamp 40)
-            # center_gt_goals_40 = center_gt_trajs[torch.arange(num_center_objects), max_valid_idx, 0:2]
-            # dist_40 = (center_gt_goals_40[:, None, :] - intention_points).norm(dim=-1)
-            # center_gt_positive_idx_40 = dist_40.argmin(dim=-1)  # (num_center_objects)
+            # Intermediate goal nearest query (timestamp 40)
+            center_gt_goals_40 = center_gt_trajs[torch.arange(num_center_objects), max_valid_idx, 0:2]
+            dist_40 = (center_gt_goals_40[:, None, :] - intention_points).norm(dim=-1)
+            center_gt_positive_idx_40 = dist_40.argmin(dim=-1)  # (num_center_objects)
         else:
             raise NotImplementedError
 
@@ -409,13 +409,13 @@ class MTRDecoder(nn.Module):
                 pre_nearest_mode_idxs=center_gt_positive_idx,
                 timestamp_loss_weight=None, use_square_gmm=False,
             )
-            # max_timestamp = max_valid_idx.min()
-            # loss_reg_gmm_40, center_gt_positive_idx_40 = loss_utils.nll_loss_gmm_direct(
-            #     pred_scores=pred_scores, pred_trajs=pred_trajs_gmm[:, :, :max_timestamp, :],
-            #     gt_trajs=center_gt_trajs[:, :max_timestamp, 0:2], gt_valid_mask=center_gt_trajs_mask[:, :max_timestamp],
-            #     pre_nearest_mode_idxs=center_gt_positive_idx_40,
-            #     timestamp_loss_weight=None, use_square_gmm=False
-            # )
+            max_timestamp = max_valid_idx.min()
+            loss_reg_gmm_40, center_gt_positive_idx_40 = loss_utils.nll_loss_gmm_direct(
+                pred_scores=pred_scores, pred_trajs=pred_trajs_gmm[:, :, :max_timestamp, :],
+                gt_trajs=center_gt_trajs[:, :max_timestamp, 0:2], gt_valid_mask=center_gt_trajs_mask[:, :max_timestamp],
+                pre_nearest_mode_idxs=center_gt_positive_idx_40,
+                timestamp_loss_weight=None, use_square_gmm=False
+            )
 
             pred_vel = pred_vel[torch.arange(num_center_objects), center_gt_positive_idx]
             loss_reg_vel = F.l1_loss(pred_vel, center_gt_trajs[:, :, 2:4], reduction='none')
@@ -429,7 +429,7 @@ class MTRDecoder(nn.Module):
             weight_vel = self.model_cfg.LOSS_WEIGHTS.get('vel', 0.2)
 
             layer_loss = loss_reg_gmm * weight_reg + loss_reg_vel * weight_vel + loss_cls.sum(dim=-1) * weight_cls
-            # layer_loss += loss_reg_gmm_40 * weight_reg
+            layer_loss += loss_reg_gmm_40 * weight_reg
             layer_loss = layer_loss.mean()
             total_loss += layer_loss
             tb_dict[f'{tb_pre_tag}loss_layer{layer_idx}'] = layer_loss.item()
